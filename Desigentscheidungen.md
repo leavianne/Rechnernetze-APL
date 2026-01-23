@@ -1,5 +1,5 @@
 # Designentscheidungen
-## Architekturentscheidungen
+## 1. Architekturentscheidungen
   - drei Schichten wie in ARQ.rar vorgegeben, damit die Funktionatitäten sauber getrennt sind, wie es in der Aufgabenstellung gefordert ist 
     - Anwendungsschicht: client.c und server.c
     - ARQ-Schicht: clientSy.c und serverSy.c
@@ -8,7 +8,7 @@
   - keine Threads (wie in der Aufgabenstellung gefordert) und nur ein Socket pro Instanz
   - Verbindung zwischen ARQ-Schicht und Anwendungs von Außen mit Anwendungs-Callbacks
 
-## Protokoll-Design
+## 2. Protokoll-Design
   - 32 Bit Design für Sequenznummern, verhindert Überlaufprobleme bei der Input-Textdatei
   - anpassbare Fenstergröße (1 bis 10) mit Ringpuffer (effizientes Fensterverschieben)
   - Speicher wird wird wärend des Kompilierens reserviert und nicht dynamisch zur Laufzeit 
@@ -20,7 +20,7 @@
     - für zuverlässigen Verbindungsaufbau und Abbau mit klarer Phasentrennung
     - Verbindungsaufbau und Abbau wird in der Konsole angezeigt
 
-## Datenstrukturen
+## 3. Datenstrukturen
   - Request-Paket (Client -> Server)
     - mit Requesttype, Datenlänge, Sequenznummer und den Nutzdaten
   - Antwortpaket (Server -> Client)
@@ -36,7 +36,7 @@
   - globale statische Variablen für dei verschiedenen Protokollzustände
   - direkter Zugriff auf Zustände und Zustandsverwaltung
 
-## Algorithmen
+## 4. Algorithmen
 ### Go-Back-N Algorithmus 
   - wie in der Aufgabenstellung gefordert
   - unbestätigte Packete werden erneut verschickt
@@ -53,7 +53,7 @@
   - Sender kann N Packete ohne Bestätigung versenden
   - Fenster wird freigegeben wenn Sender eine Bestätigung erhält
 
-## Netzwerk-Implementierung 
+## 5. Netzwerk-Implementierung 
   - IPv6 wie in Aufgabenstellung gefordert
   - einfache Adressverwaltung mit IPv6
 
@@ -65,32 +65,12 @@
     - einfache Socket-Verwaltung und wenig Port-Konflikte
     - einfache Fehlerbehandlung
 
-## Fehlerbehandlung 
+## 6. Fehlerbehandlung 
   - Zufallsbasierte Paket und ACK-Verluste durch die Variable lossReq bei Requestverlusst und Variable lossAck bei ACK verlusst
   - Go-Back-N Retransmission bei Timeout: nach Timeout wird das Packet erneut gesendet
     - das garantiert die zuverlässige Übertragung der Packete
   - Protokoll-Fehlerbehandlung funktioniert bereits
 
-## Performance-Aspekte
+## 7. Performance-Aspekte
   - statischer Puffer damit nicht ständig neuer Speicher freigegeben werden muss
   - maximale Fenstergröße bei 10
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-   
