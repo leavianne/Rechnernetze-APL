@@ -28,8 +28,9 @@ static int packet_count = 0;            /* Anzahl unbestätigter Pakete */
 
 /* Ringpuffer für Sendefenster */
 static struct request send_buffer[GBN_BUFFER_SIZE];
-static int packet_timers[GBN_BUFFER_SIZE];  /* Timer in Intervallen */
-static int packet_sent[GBN_BUFFER_SIZE];    /* Paket wurde gesendet */
+static long packet_timers[GBN_BUFFER_SIZE];  /* Timer in Millisekunden */
+static int packet_sent[GBN_BUFFER_SIZE];     /* Paket wurde gesendet */
+static time_t packet_send_time[GBN_BUFFER_SIZE]; /* Zeitstempel des Sendens */
 
 /* Statische Variablen für die aktuelle Übertragung */
 static int connection_active = 0;
@@ -95,6 +96,7 @@ void initClient(char *name, const char *port)
     memset(send_buffer, 0, sizeof(send_buffer));
     memset(packet_timers, 0, sizeof(packet_timers));
     memset(packet_sent, 0, sizeof(packet_sent));
+    memset(packet_send_time, 0, sizeof(packet_send_time));
     
     printf("Client: Initialized (server=%s, port=%s)\n", name, port);
 }
@@ -169,167 +171,61 @@ static struct answer *receive_answer(int timeout_ms)
     return NULL; /* Timeout oder Fehler */
 }
 
-static void update_timers(int interval_units) 
+/* Timer aktualisieren und Timeouts prüfen */
+static int check_and_handle_timeouts(int winSize)
 {
-    for (int i = 0; i < GBN_BUFFER_SIZE; i++) {
-        if (packet_timers[i] > 0) {
-            packet_timers[i] -= interval_units;
-            if (packet_timers[i] <= 0 && packet_sent[i]) {
-                /* Timeout für dieses Paket */
-                printf("Client: Timeout for packet %lu\n", send_buffer[i].SeNr);
-            }
-        }
-    }
-}
-
-static int has_timeout(void) 
-{
+    time_t now = time(NULL);
+    int retransmitted = 0;
+    
     for (int i = 0; i < packet_count; i++) {
         int idx = (base + i) % GBN_BUFFER_SIZE;
-        if (packet_timers[idx] <= 0 && packet_sent[idx]) {
-            return 1; /* Timeout gefunden */
-        }
-    }
-    return 0;
-}
-
-static void retransmit_window(int winSize) 
-{
-    printf("Client: Retransmitting window (base=%lu, count=%d)\n", base, packet_count);
-    
-    for (int i = 0; i < winSize && i < packet_count; i++) {
-        int idx = (base + i) % GBN_BUFFER_SIZE;
-        if (packet_sent[idx]) {
-            /* Timer zurücksetzen und erneut senden */
-            packet_timers[idx] = GBN_TIMEOUT_UNITS;
-            if (send_packet(&send_buffer[idx]) < 0) {
-                fprintf(stderr, "Client: Retransmission failed for packet %lu\n",
-                        send_buffer[idx].SeNr);
-            } else {
-                printf("Client: Retransmitted packet %lu\n", send_buffer[idx].SeNr);
+        
+        if (packet_sent[idx] && packet_send_time[idx] > 0) {
+            double elapsed = difftime(now, packet_send_time[idx]);
+            
+            /* Timeout prüfen: GBN_TIMEOUT_UNITS * GBN_TIMEOUT_INT_MS Millisekunden */
+            double timeout_seconds = (GBN_TIMEOUT_UNITS * GBN_TIMEOUT_INT_MS) / 1000.0;
+            
+            if (elapsed >= timeout_seconds) {
+                printf("Client: Timeout detected for packet %lu (elapsed=%.1fs)\n", 
+                       send_buffer[idx].SeNr, elapsed);
+                retransmitted = 1;
             }
         }
     }
+    
+    /* Alle Pakete im Fenster erneut senden, falls Timeout */
+    if (retransmitted) {
+        printf("Client: Retransmitting window (base=%lu, count=%d)\n", base, packet_count);
+        for (int i = 0; i < winSize && i < packet_count; i++) {
+            int idx = (base + i) % GBN_BUFFER_SIZE;
+            if (packet_sent[idx]) {
+                packet_send_time[idx] = now;
+                if (send_packet(&send_buffer[idx]) < 0) {
+                    fprintf(stderr, "Client: Retransmission failed for packet %lu\n",
+                            send_buffer[idx].SeNr);
+                    return -1;
+                } else {
+                    printf("Client: Retransmitted packet %lu\n", send_buffer[idx].SeNr);
+                }
+            }
+        }
+        return 1;  /* Retransmission durchgeführt */
+    }
+    
+    return 0;  /* Kein Timeout */
 }
 
 /* --------------------------------------------------------------- */
-/*  Haupt-ARQ-Funktion (doRequest)                                 */
-/* --------------------------------------------------------------- */
-
-static struct answer *doRequest(struct request *req, int winSize, 
-                                int *windowFull, int *retransmission)
-{
-    struct answer *ans = NULL;
-    int timeout_count = 0;
-    int max_retries = 3;
-    int needs_retransmit = 0;
-    
-    /* Parameter initialisieren */
-    if (windowFull) *windowFull = 0;
-    if (retransmission) *retransmission = 0;
-    
-    /* Fenster voll? */
-    if (packet_count >= winSize) {
-        if (windowFull) *windowFull = 1;
-        printf("Client: Window full (%d/%d)\n", packet_count, winSize);
-        struct answer *ans = receive_answer(50);
-        if (ans != NULL) {
-            // ACK könnte Fenster freimachen
-            return ans;
-        }
-        return NULL;
-    }
-    
-    /* Data-Paket in Puffer speichern */
-    if (req->ReqType == ReqData) {
-        int idx = next_seqnum % GBN_BUFFER_SIZE;
-        
-        /* Altes Paket überschreiben */
-        memcpy(&send_buffer[idx], req, sizeof(struct request));
-        packet_timers[idx] = GBN_TIMEOUT_UNITS;
-        packet_sent[idx] = 1;
-        
-        next_seqnum++;
-        packet_count++;
-        
-        printf("Client: Stored packet %lu in buffer[%d] (count=%d)\n",
-               req->SeNr, idx, packet_count);
-    }
-    
-    /* Paket senden */
-    if (send_packet(req) < 0) {
-        return NULL;
-    }
-    
-    /* Auf Antwort warten */
-    while (timeout_count < max_retries) {
-        /* Timer aktualisieren */
-        update_timers(1); /* 1 Intervall */
-        
-        /* Auf Antwort warten (maximal 1 Intervall) */
-        ans = receive_answer(GBN_TIMEOUT_INT_MS);
-        
-        if (ans != NULL) {
-            /* Antwort empfangen */
-            if (ans->AnswType == AnswErr || ans->AnswType == AnswWarn) {
-                printf("Client: Received error/warning (err=%lu)\n", ans->ErrNo);
-                return ans;
-            }
-            break; /* Erfolgreiche Antwort */
-        }
-        
-        /* Timeout: Prüfen ob Retransmission nötig */
-        needs_retransmit = has_timeout();
-        
-        if (needs_retransmit) {
-            if (retransmission) *retransmission = 1;
-            retransmit_window(winSize);
-            timeout_count++;
-        } else {
-            /* Kein Timeout, weiter warten */
-            usleep(GBN_TIMEOUT_INT_MS * 1000);
-        }
-    }
-    
-    if (ans == NULL) {
-        printf("Client: No response after %d retries\n", max_retries);
-        return NULL;
-    }
-    
-    /* Fenster basierend auf kumulativem ACK verschieben */
-    if (ans->AnswType == AnswOk || ans->AnswType == AnswHello) {
-        unsigned long ack_seq = ans->SeNo;
-        
-        if (ack_seq > base) {
-            int packets_to_free = ack_seq - base;
-            
-            printf("Client: Advancing window (%lu -> %lu), freeing %d packets\n",
-                   base, ack_seq, packets_to_free);
-            
-            /* Alte Pakete aus Puffer entfernen */
-            for (int i = 0; i < packets_to_free && i < packet_count; i++) {
-                int idx = (base + i) % GBN_BUFFER_SIZE;
-                packet_sent[idx] = 0;
-                packet_timers[idx] = 0;
-            }
-            
-            packet_count -= packets_to_free;
-            if (packet_count < 0) packet_count = 0;
-            base = ack_seq;
-        }
-    }
-    
-    return ans;
-}
-
-/* --------------------------------------------------------------- */
-/*  Externe ARQ-API (Wrapper um doRequest)                         */
+/*  Verbindungs-Setup und -Abbau (Hello, Close)                   */
 /* --------------------------------------------------------------- */
 
 int arqSendHello(int winSize) 
 {
     struct request req;
     struct answer *ans;
+    int retry_count = 0;
+    int max_retries = 5;
     
     /* Request vorbereiten */
     memset(&req, 0, sizeof(req));
@@ -342,106 +238,45 @@ int arqSendHello(int winSize)
     
     printf("Client: Sending Hello (window=%d)\n", winSize);
     
-    /* Hello senden und auf Antwort warten */
-    ans = doRequest(&req, winSize, NULL, NULL);
-    
-    if (ans == NULL) {
-        fprintf(stderr, "Client: No response to Hello\n");
-        return -1;
-    }
-    
-    if (ans->AnswType != AnswHello && ans->AnswType != AnswOk) {
-        fprintf(stderr, "Client: Invalid response to Hello: %c\n", ans->AnswType);
-        return -2;
-    }
-    
-    connection_active = 1;
-    printf("Client: Hello acknowledged\n");
-    return 0;
-}
-
-int arqSendData(const struct app_unit *app, int winSize) 
-{
-    struct request req;
-    struct answer *ans;
-    int windowFull = 0;
-    int retransmission = 0;
-    int retry_count = 0;
-    
-    if (!connection_active) {
-        fprintf(stderr, "Client: No active connection\n");
-        return -1;
-    }
-    
-    if (!app || app->len <= 0) {
-        fprintf(stderr, "Client: Invalid app unit\n");
-        return -1;
-    }
-    
-    /* Request vorbereiten */
-    memset(&req, 0, sizeof(req));
-    req.ReqType = ReqData;
-    req.SeNr = current_packet_num;
-    
-    /* Daten kopieren (begrenzt auf BufferSize) */
-    size_t copy_len = app->len;
-    if (copy_len >= BufferSize) {
-        copy_len = BufferSize - 1;
-        fprintf(stderr, "Client: Data truncated to %zu bytes\n", copy_len);
-    }
-    
-    memcpy(req.name, app->data, copy_len);
-    req.name[copy_len] = '\0';
-    req.FlNr = copy_len;
-    
-    printf("Client: Sending Data packet %lu (len=%lu)\n", 
-           current_packet_num, req.FlNr);
-    
-    /* Paket senden mit GBN-Logik */
-    do {
-        ans = doRequest(&req, winSize, &windowFull, &retransmission);
+    /* Hello mit Retry senden */
+    while (retry_count < max_retries) {
+        if (send_packet(&req) < 0) {
+            fprintf(stderr, "Client: Failed to send Hello\n");
+            return -1;
+        }
         
-        if (retransmission) {
-            printf("Client: Retransmission needed, retry %d\n", retry_count + 1);
-            retry_count++;
-            if (retry_count > 3) {
-                fprintf(stderr, "Client: Too many retransmissions for packet %lu\n",
-                        current_packet_num);
-                return -1;
+        /* Auf Antwort warten */
+        ans = receive_answer(GBN_TIMEOUT_INT_MS * GBN_TIMEOUT_UNITS);
+        
+        if (ans != NULL) {
+            if (ans->AnswType == AnswHello || ans->AnswType == AnswOk) {
+                connection_active = 1;
+                base = 0;
+                next_seqnum = 0;
+                packet_count = 0;
+                printf("Client: Hello acknowledged\n");
+                return 0;
+            } else {
+                fprintf(stderr, "Client: Invalid response to Hello: %c\n", ans->AnswType);
+                return -2;
             }
-            continue;
         }
         
-        if (windowFull) {
-            /* Fenster voll, warten */
-            printf("Client: Window full, waiting...\n");
-            usleep(GBN_TIMEOUT_INT_MS * 1000);
-            continue;
-        }
-        
-        break;
-    } while (1);
-    
-    if (ans == NULL) {
-        fprintf(stderr, "Client: No response for packet %lu\n", current_packet_num);
-        return -3;
+        retry_count++;
+        printf("Client: Hello timeout, retry %d/%d\n", retry_count, max_retries);
+        usleep(GBN_TIMEOUT_INT_MS * 1000);
     }
     
-    if (ans->AnswType == AnswErr || ans->AnswType == AnswWarn) {
-        fprintf(stderr, "Client: Error/Warning for packet %lu: %lu\n",
-                current_packet_num, ans->ErrNo);
-        return -4;
-    }
-    
-    /* Nächste Paketnummer */
-    current_packet_num++;
-    return 0;
+    fprintf(stderr, "Client: No response to Hello after %d retries\n", max_retries);
+    return -1;
 }
 
 int arqSendClose(int winSize) 
 {
     struct request req;
     struct answer *ans;
+    int retry_count = 0;
+    int max_retries = 5;
     
     if (!connection_active) {
         fprintf(stderr, "Client: No active connection\n");
@@ -456,20 +291,195 @@ int arqSendClose(int winSize)
     
     printf("Client: Sending Close (seq=%lu)\n", current_packet_num);
     
-    /* Close senden */
-    ans = doRequest(&req, winSize, NULL, NULL);
+    /* Close mit Retry senden */
+    while (retry_count < max_retries) {
+        if (send_packet(&req) < 0) {
+            fprintf(stderr, "Client: Failed to send Close\n");
+            return -1;
+        }
+        
+        ans = receive_answer(GBN_TIMEOUT_INT_MS * GBN_TIMEOUT_UNITS);
+        
+        if (ans != NULL) {
+            if (ans->AnswType == AnswOk) {
+                connection_active = 0;
+                printf("Client: Close acknowledged\n");
+                return 0;
+            } else {
+                fprintf(stderr, "Client: Invalid response to Close: %c\n", ans->AnswType);
+                return -2;
+            }
+        }
+        
+        retry_count++;
+        printf("Client: Close timeout, retry %d/%d\n", retry_count, max_retries);
+        usleep(GBN_TIMEOUT_INT_MS * 1000);
+    }
     
-    if (ans == NULL) {
-        fprintf(stderr, "Client: No response to Close\n");
+    fprintf(stderr, "Client: No response to Close after %d retries\n", max_retries);
+    return -1;
+}
+
+/* --------------------------------------------------------------- */
+/*  Datenübertragung mit Go-Back-N ARQ                            */
+/* --------------------------------------------------------------- */
+
+int arqSendData(const struct app_unit *app, int winSize) 
+{
+    struct request req;
+    struct answer *ans;
+    int idx;
+    int retry_count = 0;
+    int max_retries = 10;
+    
+    if (!connection_active) {
+        fprintf(stderr, "Client: No active connection\n");
         return -1;
     }
     
-    if (ans->AnswType != AnswOk) {
-        fprintf(stderr, "Client: Invalid response to Close: %c\n", ans->AnswType);
-        return -2;
+    if (!app || app->len <= 0) {
+        fprintf(stderr, "Client: Invalid app unit\n");
+        return -1;
     }
     
-    connection_active = 0;
-    printf("Client: Close acknowledged\n");
-    return 0;
+    /* Neue Request vorbereiten */
+    memset(&req, 0, sizeof(req));
+    req.ReqType = ReqData;
+    req.SeNr = current_packet_num;  /* Sequenznummer für dieses Paket */
+    
+    /* Daten kopieren (begrenzt auf BufferSize) */
+    size_t copy_len = app->len;
+    if (copy_len >= BufferSize) {
+        copy_len = BufferSize - 1;
+        fprintf(stderr, "Client: Data truncated to %zu bytes\n", copy_len);
+    }
+    
+    memcpy(req.name, app->data, copy_len);
+    req.name[copy_len] = '\0';
+    req.FlNr = copy_len;
+    
+    printf("Client: Preparing Data packet %lu (len=%lu)\n", 
+           current_packet_num, req.FlNr);
+    
+    /* ============================================================ */
+    /* HAUPTSCHLEIFE: Paket senden und auf ACK warten               */
+    /* ============================================================ */
+    
+    while (retry_count < max_retries) {
+        /* Fenster voll? */
+        if (packet_count >= winSize) {
+            printf("Client: Window full (%d/%d), waiting for ACK...\n", 
+                   packet_count, winSize);
+            
+            /* Auf ACK warten, um Fenster zu leeren */
+            ans = receive_answer(GBN_TIMEOUT_INT_MS);
+            if (ans != NULL) {
+                /* ACK verarbeiten */
+                if (ans->AnswType == AnswOk) {
+                    unsigned long ack_seq = ans->SeNo;
+                    
+                    if (ack_seq > base) {
+                        int packets_to_free = ack_seq - base;
+                        
+                        printf("Client: Window advanced (%lu -> %lu), freed %d packets\n",
+                               base, ack_seq, packets_to_free);
+                        
+                        /* Alte Pakete aus Puffer entfernen */
+                        for (int i = 0; i < packets_to_free && i < packet_count; i++) {
+                            int free_idx = (base + i) % GBN_BUFFER_SIZE;
+                            packet_sent[free_idx] = 0;
+                            packet_send_time[free_idx] = 0;
+                        }
+                        
+                        packet_count -= packets_to_free;
+                        if (packet_count < 0) packet_count = 0;
+                        base = ack_seq;
+                    }
+                } else if (ans->AnswType == AnswWarn || ans->AnswType == AnswErr) {
+                    fprintf(stderr, "Client: Received error response: %lu\n", ans->ErrNo);
+                    /* Fenster zurücksetzen und von vorne senden */
+                    break;
+                }
+            }
+            
+            /* Timeouts prüfen */
+            if (check_and_handle_timeouts(winSize) < 0) {
+                return -1;
+            }
+            
+            continue;
+        }
+        
+        /* Paket im Puffer speichern (nur beim ersten Mal) */
+        if (retry_count == 0) {
+            idx = req.SeNr % GBN_BUFFER_SIZE;
+            memcpy(&send_buffer[idx], &req, sizeof(struct request));
+            packet_sent[idx] = 1;
+            packet_send_time[idx] = time(NULL);
+            packet_count++;
+            next_seqnum++;  /* Nächste Paketnum für nächsten Aufruf */
+            
+            printf("Client: Stored packet %lu in buffer[%d] (window=%d/%d)\n",
+                   req.SeNr, idx, packet_count, winSize);
+        }
+        
+        /* Paket senden */
+        if (send_packet(&req) < 0) {
+            fprintf(stderr, "Client: Failed to send packet %lu\n", current_packet_num);
+            return -1;
+        }
+        
+        /* Auf ACK warten */
+        ans = receive_answer(GBN_TIMEOUT_INT_MS * GBN_TIMEOUT_UNITS);
+        
+        if (ans != NULL) {
+            /* Antwort erhalten */
+            if (ans->AnswType == AnswOk) {
+                unsigned long ack_seq = ans->SeNo;
+                
+                /* Fenster verschieben basierend auf kumulativem ACK */
+                if (ack_seq > base) {
+                    int packets_to_free = ack_seq - base;
+                    
+                    printf("Client: Received ACK for seq %lu (base: %lu -> %lu)\n",
+                           ack_seq, base, ack_seq);
+                    
+                    for (int i = 0; i < packets_to_free && i < packet_count; i++) {
+                        int free_idx = (base + i) % GBN_BUFFER_SIZE;
+                        packet_sent[free_idx] = 0;
+                        packet_send_time[free_idx] = 0;
+                    }
+                    
+                    packet_count -= packets_to_free;
+                    if (packet_count < 0) packet_count = 0;
+                    base = ack_seq;
+                }
+                
+                /* Erfolg! */
+                current_packet_num++;
+                printf("Client: Packet %lu successfully transmitted\n", 
+                       current_packet_num - 1);
+                return 0;
+                
+            } else if (ans->AnswType == AnswWarn || ans->AnswType == AnswErr) {
+                fprintf(stderr, "Client: Error/Warning for packet %lu: %lu\n",
+                        current_packet_num, ans->ErrNo);
+                return -4;
+            }
+        }
+        
+        /* ACK-Timeout: Timeouts prüfen und ggf. retransmit */
+        int timeout_result = check_and_handle_timeouts(winSize);
+        if (timeout_result < 0) {
+            return -1;  /* Fehler beim Retransmit */
+        }
+        
+        retry_count++;
+        printf("Client: ACK timeout for packet %lu, retry %d/%d\n",
+               current_packet_num, retry_count, max_retries);
+        usleep(GBN_TIMEOUT_INT_MS * 500);  /* Kurz warten vor nächstem Versuch */
+    }
+    
+    fprintf(stderr, "Client: Max retries exceeded for packet %lu\n", current_packet_num);
+    return -3;
 }
