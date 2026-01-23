@@ -167,3 +167,42 @@ Mehrere Pakete werden gesendet
 [CLIENT] TIMEOUT: Retransmitting window (base=1, count=2)  
 [CLIENT] SEND: type=D seq=1  
 [CLIENT] SEND: type=D seq=2  
+
+# BONUS-TESTS
+## Test mit großem Paketverlust und großem Fenster
+
+Terminal 1
+```
+./server -p 3333 -f output_bonus.txt -r 0.5 -a 0.2
+```
+Terminal 2 (Window=10, größtes Fenster)
+```
+./client -a ::1 -p 3333 -f input.txt -w 10
+```
+### Überprüfung: 
+Trotz 50% Paketverlust funktioniert der Transfer
+
+## Test mit größerer Datei
+Terminal 1: Größere Testdatei erstellen
+```
+cat > input_large.txt << 'EOF'
+Zeile 1
+Zeile 2
+Zeile 3
+Zeile 4
+Zeile 5
+Zeile 6
+Zeile 7
+Zeile 8
+Zeile 9
+Zeile 10
+EOF
+```
+Terminal 1 (Server)
+```
+./server -p 3333 -f output_large.txt
+```
+Terminal 2 (Client)
+```
+./client -a ::1 -p 3333 -f input_large.txt -w 5
+```
