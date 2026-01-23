@@ -33,8 +33,7 @@ Intervalle mit Verlust:
 ./server -p 3340 -f out_int.txt -a 0.5
 ./client -a ::1 -p 3340 -f input.txt -w 1
 
-	-> Teilweise Endlosschleife, teilweise funktioniert es
-	
+	-> funktioniert nur mit Fenstergröße 3
 
 ## 3.3 Sequenzprüfung und ACK
 Korrekte Sequenz → ACK OK: funktioniert
