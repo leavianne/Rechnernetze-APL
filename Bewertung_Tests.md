@@ -186,16 +186,16 @@ Trotz 50% Paketverlust funktioniert der Transfer
 Terminal 1: Größere Testdatei erstellen
 ```
 cat > input_large.txt << 'EOF'
-Zeile 1
-Zeile 2
-Zeile 3
-Zeile 4
-Zeile 5
-Zeile 6
-Zeile 7
-Zeile 8
-Zeile 9
-Zeile 10
+Ein großer Teich war zugefroren;
+Die Fröschlein, in der Tiefe verloren,
+Durften nicht ferner quaken noch springen,
+Versprachen sich aber, im halben Traum:
+Fänden sie nur da oben Raum,
+Wie Nachtigallen wollten sie singen.
+Der Tauwind kam, das Eis zerschmolz,
+Nun ruderten sie und landeten stolz
+Und saßen am Ufer weit und breit
+Und quakten wie vor alter Zeit.
 EOF
 ```
 Terminal 1 (Server)
