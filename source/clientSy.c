@@ -184,7 +184,7 @@ static void update_timers(int interval_units)
 
 static int has_timeout(void) 
 {
-    for (int i = 0; i < GBN_BUFFER_SIZE; i++) {
+    for (int i = 0; i < packet_count; i++) {
         int idx = (base + i) % GBN_BUFFER_SIZE;
         if (packet_timers[idx] <= 0 && packet_sent[idx]) {
             return 1; /* Timeout gefunden */
