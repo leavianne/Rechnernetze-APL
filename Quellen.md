@@ -7,3 +7,5 @@ https://www.youtube.com/watch?v=SmsJyMye43E
 Zustandsdiagramm:
 https://de.wikipedia.org/wiki/Zustandsdiagramm_(UML)
 
+Github Copilot Unterhaltung (DANN WIEDER LÖSCHEN)
+https://github.com/copilot/share/ca574290-49e4-8083-a112-4804a07d6866  
