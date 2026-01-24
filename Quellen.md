@@ -7,4 +7,7 @@ https://www.youtube.com/watch?v=SmsJyMye43E
 Zustandsdiagramm:  
 https://de.wikipedia.org/wiki/Zustandsdiagramm_(UML)  
 
+PlantUML (zum Erstellen von UML-Diagramme)  
+ https://plantuml.com/plantuml  
+
 tipp: für zeilenumbrüche zweimal space nach jeder zeile
