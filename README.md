@@ -1,6 +1,6 @@
 ## Rechnernetze und Kommunikationssysteme APL - WS 25/26
 
-### Erfasst von:
+### Verfasst von:
 Amelie Johanna Trautmann  
 Anton Meyer  
 Iryna Skworzow  
