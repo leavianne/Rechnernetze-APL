@@ -1,5 +1,5 @@
 Hiermit erklären wir, dass wir diese APL selbstständig und ohne Hilfe von außenstehenden Personen angefertigt und getestet haben. 
-Wir haben für unser Verständnis der Anforderungen und der Prozesse (z.B die Funktionsweise Go-Back-N Algorithmus) uns bei den unten aufgeführten Online-Tetxquellen informiert. Die Bearbeitung der Aufgabenstellung ist hauptsächlich mit Hilfe von GitHub Copilot und erfolgt, welche sowohl für den Code als auch für die schriftlichen Dokumentationen wie die Designentscheidungen Fehler korrigiert und Funktionsabläufe vorgeschlagen hat.
+Wir haben für unser Verständnis der Anforderungen und der Prozesse (z.B die Funktionsweise Go-Back-N Algorithmus) uns bei den unten aufgeführten Online-Tetxquellen informiert. Die Bearbeitung der Aufgabenstellung ist hauptsächlich mit Hilfe von GitHub Copilot erfolgt, welche sowohl für den Code als auch für die schriftlichen Dokumentationen wie die Designentscheidungen Fehler korrigiert und Funktionsabläufe vorgeschlagen hat.
 
 Iryna Skworzow, Lea Vianne Eichler, Amelie Johanna Trautmann, Anton Meyer
 
