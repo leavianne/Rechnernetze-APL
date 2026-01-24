@@ -67,3 +67,33 @@ FINISHED --> [*]
 
 @enduml
 ```
+## Ausschreibung von Copilot für Zustandsdiagramm für den Server:
+```
+stateDiagram-v2
+    [*] --> LISTEN : arqServerLoop() start
+    LISTEN --> GOT_REQUEST : select() readable -> getRequest()
+    GOT_REQUEST --> DISCARD_PACKET : simulated lossReq -> drop
+    GOT_REQUEST --> PROCESS_HELLO : ReqHello
+    GOT_REQUEST --> PROCESS_DATA : ReqData
+    GOT_REQUEST --> PROCESS_CLOSE : ReqClose
+    PROCESS_HELLO --> START_APP : appStartCallback()
+    START_APP --> SEND_HELLO_ACK : set transferActive=1
+    SEND_HELLO_ACK --> LISTEN : sendAnswer(AnswHello)
+    PROCESS_DATA --> NOT_ACTIVE : if !transferActive -> AnswErr
+    PROCESS_DATA --> IN_ORDER : if SeNr == nextExpected
+    PROCESS_DATA --> DUPLICATE : if SeNr < nextExpected
+    PROCESS_DATA --> OUT_OF_ORDER : if SeNr > nextExpected
+    IN_ORDER --> WRITE_APP : appWriteCallback()
+    WRITE_APP --> SEND_OK_ACK : nextExpected++; AnswOk.SeNo = nextExpected
+    DUPLICATE --> SEND_OK_ACK
+    OUT_OF_ORDER --> SEND_WARN : AnswWarn(ERR_WRONG_SEQ)
+    SEND_OK_ACK --> MAY_DROP_ACK : simulate lossAck? -> drop ack
+    SEND_OK_ACK --> SEND_ANSWER : sendAnswer(answ)
+    SEND_ANSWER --> LISTEN
+    PROCESS_CLOSE --> END_APP : appEndCallback(); AnswOk.SeNo = nextExpected
+    END_APP --> SEND_ANSWER
+    NOT_ACTIVE --> SEND_ANSWER
+    DISCARD_PACKET --> LISTEN
+    SEND_ANSWER --> LISTEN
+    LISTEN --> [*] : on Close & AnswOk -> exitServer()
+```
