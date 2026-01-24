@@ -1,3 +1,5 @@
 ## Rechnernetze und Kommunikationssysteme APL - WS 25/26
 
-wir schaffen das schon
+es ist gerade um 2 und ich hoffe ich werde nicht zu lange pennen  
+
+ich habe mal mit copilot neue Zustandsdiagramme erstellt, ich hoffe sie passen so? ich tue den code in eine datei rein
