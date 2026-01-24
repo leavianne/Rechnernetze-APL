@@ -1,4 +1,4 @@
-## Code für PlantUML:
+## Code für PlantUML (Client):
 
 ```
 @startuml Client_GBN_StateMachine
