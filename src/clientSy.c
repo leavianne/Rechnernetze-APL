@@ -358,9 +358,9 @@ int arqSendData(const struct app_unit *app, int winSize)
     struct request req;
     struct answer *ans;
     int interval_count = 0;
-    const int max_intervals = 50;   // Max 50 Intervalle = 5 Sekunden Geduld
-    struct timeval tv;              // Für select()
-    fd_set readfds;                 // Für select()
+    const int max_intervals = 50;
+    struct timeval tv;
+    fd_set readfds;
     
     if (!connection_active) {
         fprintf(stderr, "[CLIENT] ERROR: No active connection\n");
@@ -375,9 +375,8 @@ int arqSendData(const struct app_unit *app, int winSize)
     // Request vorbereiten
     memset(&req, 0, sizeof(req));
     req.ReqType = ReqData;
-    req.SeNr = current_packet_num;  // Sequenznummer für dieses Paket
+    req.SeNr = current_packet_num;
     
-    // Daten kopieren
     size_t copy_len = app->len;
     if (copy_len >= BufferSize) {
         copy_len = BufferSize - 1;
@@ -391,16 +390,16 @@ int arqSendData(const struct app_unit *app, int winSize)
            current_packet_num, req.FlNr);
     
     /* ============================================================ */
-    /* HAUPTSCHLEIFE: Pro Intervall max 1 Paket senden              */
+    /* ECHTES Go-Back-N: Fenster kann mehrere Pakete halten!        */
     /* ============================================================ */
     
-    int packet_in_buffer = 0;  // Flag: Paket wurde bereits eingefügt
+    int packet_in_buffer = 0;
     
     while (interval_count < max_intervals) {
         printf("[CLIENT] --- INTERVAL %d START (window=%d/%d, base=%lu, next=%lu) ---\n",
                interval_count, packet_count, winSize, base, next_seqnum);
         
-        // 1. Timeout prüfen und retransmit
+        // 1. TIMEOUT PRÜFEN und RETRANSMIT
         if (has_timeout()) {
             printf("[CLIENT] TIMEOUT at interval %d\n", interval_count);
             if (retransmit_all() < 0) {
@@ -408,43 +407,33 @@ int arqSendData(const struct app_unit *app, int winSize)
             }
         }
         
-        // 2. Neues Paket ins Fenster einfügen (falls Platz und noch nicht drin)
+        // 2. NEUES PAKET INS FENSTER (falls Platz und noch nicht drin)
         if (!packet_in_buffer && packet_count < winSize) {
-            int idx = req.SeNr % GBN_BUFFER_SIZE; // Ringpuffer-Index
-
-            // Paket in Buffer speichern
+            int idx = req.SeNr % GBN_BUFFER_SIZE;
             memcpy(&send_buffer[idx], &req, sizeof(struct request));
             packet_sent[idx] = 1;
-            packet_timer[idx] = GBN_TIMEOUT_UNITS;  // Timer = 3 Intervalle = 300ms
+            packet_timer[idx] = GBN_TIMEOUT_UNITS;
             packet_count++;
             next_seqnum++;
-            packet_in_buffer = 1;   // <- Nur einmal einfügen
+            packet_in_buffer = 1;
             
             printf("[CLIENT] ENQUEUE: packet seq=%lu into buffer[%d], window now %d/%d\n",
                    req.SeNr, idx, packet_count, winSize);
         }
         
-        // 3. Sende 1 Paket
-        if (packet_in_buffer && packet_count > 0) {
-            int idx;
-
-            // Welches Paket senden?
-            if (packet_in_buffer && send_buffer[req.SeNr % GBN_BUFFER_SIZE].SeNr == req.SeNr) {
-                // Sende das gerade eingefügte Paket (Neu)
-                idx = req.SeNr % GBN_BUFFER_SIZE;
-            } else {
-                // Sende erstes Paket (Retransmit)
-                idx = base % GBN_BUFFER_SIZE;
-            }
-            
-            if (send_packet(&send_buffer[idx]) < 0) {
-                return -1;
+        // 3. SENDE ALLE PAKETE IM FENSTER (echtes Go-Back-N!)
+        for (int i = 0; i < packet_count; i++) {
+            int send_idx = (base + i) % GBN_BUFFER_SIZE;
+            if (packet_sent[send_idx]) {
+                if (send_packet(&send_buffer[send_idx]) < 0) {
+                    return -1;
+                }
             }
         }
         
-        // 4. Genau 1 Intervall (100ms) auf ACK warten 
-        tv.tv_sec = GBN_TIMEOUT_INT_MS / 1000;              // 0 Sekunden
-        tv.tv_usec = (GBN_TIMEOUT_INT_MS % 1000) * 1000;    // 100000 Mikrosekunden = 100ms
+        // 4. WARTE AUF ACK (100ms)
+        tv.tv_sec = GBN_TIMEOUT_INT_MS / 1000;
+        tv.tv_usec = (GBN_TIMEOUT_INT_MS % 1000) * 1000;
         
         FD_ZERO(&readfds);
         FD_SET(sockfd, &readfds);
@@ -452,63 +441,51 @@ int arqSendData(const struct app_unit *app, int winSize)
         int ret = select(sockfd + 1, &readfds, NULL, NULL, &tv);
         
         if (ret > 0) {
-            // Socken ist lesbar = ACK empfangen
             ans = receive_answer();
             if (ans != NULL && ans->AnswType == AnswOk) {
                 unsigned long ack_seq = ans->SeNo;
                 
                 printf("[CLIENT] ACK RECEIVED: ack_seq=%lu\n", ack_seq);
                 
-                // Prüfe ob ACK im Fenster liegt
-                if (ack_seq >= base && ack_seq <= next_seqnum) {
-
-                    // Fenster verschieben (kumulative ACK)
-                    if (ack_seq > base) {
-                        int packets_to_free = ack_seq - base;
-                        printf("[CLIENT] WINDOW ADVANCE: base %lu -> %lu (free %d packets)\n",
-                               base, ack_seq, packets_to_free);
-                        
-                        // Alte Pakete aus dem Puffer entfernen
-                        for (int i = 0; i < packets_to_free && i < packet_count; i++) {
-                            int free_idx = (base + i) % GBN_BUFFER_SIZE;
-                            packet_sent[free_idx] = 0;
-                            packet_timer[free_idx] = 0;
-                        }
-                        
-                        packet_count -= packets_to_free;
-                        if (packet_count < 0) packet_count = 0;
-                        base = ack_seq;
+                // FENSTER VERSCHIEBEN (kumulativ!)
+                if (ack_seq > base && ack_seq <= next_seqnum) {
+                    int packets_to_free = ack_seq - base;
+                    printf("[CLIENT] WINDOW ADVANCE: base %lu -> %lu (free %d packets)\n",
+                           base, ack_seq, packets_to_free);
+                    
+                    for (int i = 0; i < packets_to_free && i < packet_count; i++) {
+                        int free_idx = (base + i) % GBN_BUFFER_SIZE;
+                        packet_sent[free_idx] = 0;
+                        packet_timer[free_idx] = 0;
                     }
-
-                    // Wurde das Paket bestätigt?
-                    if (ack_seq > req.SeNr) {
-                        printf("[CLIENT] CONFIRMED: packet seq=%lu confirmed\n", req.SeNr);
-                        current_packet_num++;
-                        return 0;  // Erfolg
-                    }
-                } else {
-                    // ACK außerhalb des Fensters -> ignorieren
-                    printf("[CLIENT] ACK OUT OF WINDOW: %lu not in [%lu, %lu) - ignored\n",
-                           ack_seq, base, next_seqnum);
+                    
+                    packet_count -= packets_to_free;
+                    if (packet_count < 0) packet_count = 0;
+                    base = ack_seq;
+                }
+                
+                // IST UNSER PAKET BESTÄTIGT?
+                if (ack_seq > req.SeNr) {
+                    printf("[CLIENT] CONFIRMED: packet seq=%lu confirmed\n", req.SeNr);
+                    current_packet_num++;
+                    return 0;
                 }
             }
         } else if (ret < 0) {
             perror("select");
             return -1;
         }
-        // ret == 0: select timeout - Intervall vorbei
         
-        // 5. Dekrementiere alle Timer für nächstes Intervall
+        // 5. TIMER DEKREMENTIEREN
         decrement_all_timers();
         
         printf("[CLIENT] --- INTERVAL %d END ---\n\n", interval_count);
-        
         interval_count++;
     }
     
     fprintf(stderr, "[CLIENT] ERROR: Max intervals exceeded for packet %lu\n", 
             current_packet_num);
-    return -3;  // Fehler: Zu lange gewartet
+    return -3;
 }
 
 /**
