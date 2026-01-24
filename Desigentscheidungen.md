@@ -1,76 +1,125 @@
-# Designentscheidungen
+# Designentscheidungen für ARQ Go-Back-N Implementierung
+
 ## 1. Architekturentscheidungen
-  - drei Schichten wie in ARQ.rar vorgegeben, damit die Funktionatitäten sauber getrennt sind, wie es in der Aufgabenstellung gefordert ist 
-    - Anwendungsschicht: client.c und server.c
-    - ARQ-Schicht: clientSy.c und serverSy.c
-    - UDP-Schicht: auch in clientSy.c und serverSy.c integriert
-  -  einfach zu Testen der einzelnen Komponenten
-  - keine Threads (wie in der Aufgabenstellung gefordert) und nur ein Socket pro Instanz
-  - Verbindung zwischen ARQ-Schicht und Anwendungs von Außen mit Anwendungs-Callbacks
+
+### 1.1 Drei-Schichten-Modell
+- **Anwendungsschicht**: client.c und server.c
+  - Datei I/O und User-Interface
+  - Callbacks für ARQ-Schicht (appStartFn, appWriteFn, appEndFn)
+
+- **ARQ-Schicht**: clientSy.c und serverSy.c
+  - Go-Back-N Algorithmus, Fenster, Timer, Retransmissionen
+  - Protokolllogik für Sender und Empfänger
+
+- **UDP/SAP-Schicht**: in clientSy.c und serverSy.c integriert
+  - Socket-Verwaltung und sendto/recvfrom Operationen
+
+### 1.2 Callback-Architektur
+Die ARQ-Schicht ruft Anwendungs-Callbacks auf statt direkt auf Dateien zuzugreifen. Das entkoppelt Protokoll und Dateilogik.
+
+### 1.3 Single-Socket-Design
+Ein Socket pro Client/Server-Instanz. Vereinfachte Verwaltung, keine Threads, asynchrones Event-Handling mit select().
 
 ## 2. Protokoll-Design
-  - 32 Bit Design für Sequenznummern, verhindert Überlaufprobleme bei der Input-Textdatei
-  - anpassbare Fenstergröße (1 bis 10) mit Ringpuffer (effizientes Fensterverschieben)
-  - Speicher wird wird wärend des Kompilierens reserviert und nicht dynamisch zur Laufzeit 
-    - verhindet Heap-Fragmentierung 
-  - doppelte Puffergröße: verhindert Indexkollisionen (wenn zwei Eingabedateien auf den gleichen Speicher zugreifen wollen
-  - Zeitsteuerung in 100 ms Intervallen für Synchonität
-  - Verwendung von ACK -> bestätigtalle Packete < N
-  - Drei-Phasen-Protokoll
-    - für zuverlässigen Verbindungsaufbau und Abbau mit klarer Phasentrennung
-    - Verbindungsaufbau und Abbau wird in der Konsole angezeigt
+
+### 2.1 Paketstruktur
+- **Request** (Client → Server): Typ, Sequenznummer, Datenlänge, Nutzdaten
+- **Answer** (Server → Client): Typ, kumulative ACK (nächst erwartete Seq.Nr)
+
+### 2.2 Go-Back-N Algorithmus
+**Sender (Client):**
+- Sendefenster: [base, base+window_size-1]
+- Pro Intervall max. 1 neues Paket in Fenster
+- Bei ACK: Fenster vorwärts schieben
+- Bei Timeout: Alle Pakete im Fenster erneut senden
+
+**Empfänger (Server):**
+- Akzeptiert nur in-order Pakete (SeNr == nextExpected)
+- Sendet kumulative ACK mit nextExpected
+- Duplikate werden erkannt und ignoriert
+- Out-of-order Pakete werden verworfen
+
+### 2.3 Fensterverwaltung
+- Anpassbare Fenstergröße: 1-10 Pakete (Parameter `-w`)
+- Ringpuffer mit doppelter Größe (20 statt 10)
+- Verhindert Indexkollisionen bei Fensterverschiebung
+
+### 2.4 Zeitsteuerung
+- Intervall-basierter Timer: 100 ms pro Intervall
+- Timeout nach 3 Intervallen (300 ms)
+- Client wartet in select() auf ACK oder Timeout
+- Keine Threads nötig
+
+### 2.5 Drei-Phasen-Protokoll
+1. **HELLO**: Verbindungsaufbau, Datei öffnen
+2. **DATA**: Zuverlässige Datenübertragung mit Fenster
+3. **CLOSE**: Verbindungsabbau, Datei schließen
 
 ## 3. Datenstrukturen
-  - Request-Paket (Client -> Server)
-    - mit Requesttype, Datenlänge, Sequenznummer und den Nutzdaten
-  - Antwortpaket (Server -> Client)
-    - mit Answertype, dem reservierten Speicher und der nächsten Sequenznummer die erwartet wird
-  - für jede Textzeile 512 Byte Puffer reserviert
-  - Trennung zwischen Steuerinformationen und Nutzdaten
 
-### Ringpuffer
-  - Arraybasierter Ringpuffer mit Modulo
-  - Vorhersehbare Speichernutzung ohne dynamischen Speicher
+### 3.1 Statische Speicherverwaltung
+- Ringpuffer und Timer-Arrays werden beim Kompilieren allokiert
+- Keine dynamische Speichernutzung zur Laufzeit
+- Verhindert Heap-Fragmentierung
+- Vorhersehbare und effiziente Speichernutzung (~10 KB Overhead)
 
-### Zustandverwaltung
-  - globale statische Variablen für dei verschiedenen Protokollzustände
-  - direkter Zugriff auf Zustände und Zustandsverwaltung
+### 3.2 Zustandsverwaltung
+Globale statische Variablen für Protokollzustand:
+- base, next_seqnum, packet_count (Fenster)
+- connection_active, current_packet_num (Transfer-State)
 
-## 4. Algorithmen
-### Go-Back-N Algorithmus 
-  - wie in der Aufgabenstellung gefordert
-  - unbestätigte Packete werden erneut verschickt
-  - garantiert die korrekte Reihenfolge beim Empfänger
+## 4. Netzwerk-Implementierung
 
-### Zeitgesteuerter Algorithmus
-  - Intervall-Basierter Timer mit select() -> siehe Zeitsynchornes System
-    - Implementiertbar ohne Threads
-    - Timeout- und Event-Handling möglich damit auf die zeitbasierten Abläufe reagiert werden kann
+### 4.1 IPv6 mit UDP
+- Dual-Stack fähig (IPv6 mit IPv4-mapped Addresses)
+- Einfache Socket-Konfiguration
+- Non-blocking Client-Socket für Event-based Handling
+- Blocking Server-Socket mit select()
 
-### Fensterverwaltung
-  - effiziente Fensterverwaltung
-  - Sendefenstergröße ist über N bestimmt und Empfängerfensterliste ist fest auf 1 gesetzt
-  - Sender kann N Packete ohne Bestätigung versenden
-  - Fenster wird freigegeben wenn Sender eine Bestätigung erhält
+## 5. Fehlerbehandlung
 
-## 5. Netzwerk-Implementierung 
-  - IPv6 wie in Aufgabenstellung gefordert
-  - einfache Adressverwaltung mit IPv6
+### 5.1 Paketverlust-Simulation
+Parameter `-r` und `-a` simulieren Fehlerquoten:
+- `-r 0.2`: 20% der Requests verworfen
+- `-a 0.1`: 10% der ACKs verworfen
+- Tests das Go-Back-N Retransmission-Verhalten
 
-### Socket-Konfiguration
-  - Client: Non-blocking Socket mit select()
-    - ermöglicht zeitsynchone Steuerung 
-  - Server: Blocking Socket 
-  - ein Socket pro Instanz: ein Socket für alle Operationen
-    - einfache Socket-Verwaltung und wenig Port-Konflikte
-    - einfache Fehlerbehandlung
+### 5.2 Timeout & Retransmission
+- Jedes Paket hat eigenen Timer
+- Bei Timeout: Alle unbestätigten Pakete neu senden
+- Client wartet max. 50 Intervalle (5 Sekunden) pro Paket
+- Garantiert zuverlässige Übertragung
 
-## 6. Fehlerbehandlung 
-  - Zufallsbasierte Paket und ACK-Verluste durch die Variable lossReq bei Requestverlusst und Variable lossAck bei ACK verlusst
-  - Go-Back-N Retransmission bei Timeout: nach Timeout wird das Packet erneut gesendet
-    - das garantiert die zuverlässige Übertragung der Packete
-  - Protokoll-Fehlerbehandlung funktioniert bereits
+### 5.3 Protokoll-Fehler
+- DATA ohne aktiven Transfer wird abgelehnt
+- Falsche Sequenznummern werden erkannt
+- Datei I/O Fehler werden gemeldet
+- Unbekannte Request-Typen werden ignoriert
 
-## 7. Performance-Aspekte
-  - statischer Puffer damit nicht ständig neuer Speicher freigegeben werden muss
-  - maximale Fenstergröße bei 10
+## 6. Performance-Aspekte
+
+### 6.1 Speicher-Effizienz
+- Client-Overhead: ~10 KB für Protokoll-Puffer
+- Server: Streaming ohne Puffering
+- 512 Byte pro Zeile reserviert
+
+### 6.2 Fenster-Größe und Durchsatz
+- Größeres Fenster = höherer Durchsatz (aber mehr Speicher)
+- `-w 1`: Stop-and-Wait (einfach)
+- `-w 3`: Typisch balanciert
+- `-w 10`: Maximum (schnellste Übertragung)
+
+### 6.3 Timing-Parameter
+100 ms Intervalle ermöglichen schnelle Reaktion auf Timeouts, ohne zu aggressive zu sein bei Netzwerk-Latenzen.
+
+## 7. Zusammenfassung
+
+| Aspekt | Entscheidung |
+|--------|-------------|
+| Architektur | 3 Schichten mit Callbacks |
+| Protokoll | Go-Back-N mit kumulativen ACKs |
+| Fenster | Dynamisch 1-10, Ringpuffer |
+| Timer | Interval-basiert 100 ms, keine Threads |
+| Speicher | Statisch, kein malloc() zur Laufzeit |
+| Netzwerk | IPv6 UDP, Non-blocking Client |
+| Fehlertoleranz | Timeout + Retransmission |
