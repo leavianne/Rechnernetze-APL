@@ -85,7 +85,7 @@ void initClient(char *name, const char *port)
             continue;   // Nächste Adresse versuchen
         }
         
-        // KRITISCH: Socket auf NON-BLOCKING setzen
+        // WICHTIG: Socket auf NON-BLOCKING setzen
         // Damit blockiert recvfrom() nicht und wir können select() verwenden
         fcntl(sockfd, F_SETFL, O_NONBLOCK);
 
@@ -240,7 +240,7 @@ static int has_timeout(void)
 /**
  * retransmit_all() - Sendet alle Pakete im Fenster erneut (Go-Back-N)
  * 
- * Das ist die "Go-Back-N" Strategie:
+ * Hier ist Go-Back-N:
  * - Bei Timeout des ersten Pakets (base)
  * - Sende ALLE unbestätigten Pakete erneut
  * - Timer werden zurückgesetzt
@@ -342,16 +342,16 @@ int arqSendHello(int winSize)
 }
 
 /**
- * arqSendData() - Sendet ein Datenpaket zuverlässig
+ * arqSendData() - Sendet ein Datenpaket (zuverlässig)
  * 
  * Implementiert den Go-Back-N Algorithmus mit Intervallen (100ms)
  * 
- * Pro Intervall:
- * 1. Prüfe ob Timeout vorliegt -> Retransmit
- * 2. Füge neues Paket ins Fenster ein (falls Platz)
- * 3. Sende 1 Paket
- * 4. Warte auf ACK oder Timeout
- * 5. Dekrement Timer
+ * Pro Intervall in Reihenfolge:
+ * Prüfe ob Timeout vorliegt -> Retransmit
+ * Füge neues Paket ins Fenster ein (falls Platz)
+ * Sende 1 Paket
+ * Warte auf ACK oder Timeout
+ * Dekrement Timer
  */
 int arqSendData(const struct app_unit *app, int winSize)
 {
@@ -480,7 +480,7 @@ int arqSendData(const struct app_unit *app, int winSize)
                         base = ack_seq;
                     }
 
-                    // Wurde unser Paket bestätigt?
+                    // Wurde das Paket bestätigt?
                     if (ack_seq > req.SeNr) {
                         printf("[CLIENT] CONFIRMED: packet seq=%lu confirmed\n", req.SeNr);
                         current_packet_num++;
