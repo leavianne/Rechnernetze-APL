@@ -3,12 +3,12 @@ Wir haben für unser Verständnis der Anforderungen und der Prozesse (z.B die Fu
 
 Iryna Skworzow, Lea Vianne Eichler, Amelie Johanna Trautmann, Anton Meyer
 
-##Benutzte KI-Tools
+## Benutzte KI-Tools
 
 https://github.com/copilot GitHub copilot
 https://chat.deepseek.com/ DeepSeek
 
-##Quellen:
+## Quellen:
 Die Vorlesungen und Vorlesungsfolien für Rechnernetze und Kommunikationssysteme
 
 Go-Back-N ARQ in C:
