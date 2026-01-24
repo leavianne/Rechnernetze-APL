@@ -97,3 +97,54 @@ stateDiagram-v2
     SEND_ANSWER --> LISTEN
     LISTEN --> [*] : on Close & AnswOk -> exitServer()
 ```
+  
+## Detaillierte textuelle Beschreibung — Server (Empfänger)
+
+### Relevante Variablen
+nextExpected: Nummer des nächsten erwarteten Pakets (initial 0)
+transferActive: Flag, ob Anwendung (Datei) offen und Transfer aktiv ist
+appStartCallback, appWriteCallback, appEndCallback: Funktionspointer zur Anwendung (server.c)
+
+## Zustände & Aktionen
+
+### LISTEN
+Aktion: select() mit kurzem Timeout (100ms) auf UDP-Paket  
+Bei Paket: getRequest() -> GOT_REQUEST  
+
+### GOT_REQUEST -> processRequest()
+Simuliere Paketverlust (lossReq): ggf. return NULL -> Paket verworfen  
+
+### Je nach ReqType:  
+
+### ReqHello:
+set nextExpected = 0; rufe appStartCallback() (öffnet Datei)  
+set transferActive = 1 (bei Erfolg)  
+Antw.: AnswHello, SeNo = 0  
+
+### ReqData:
+Wenn !transferActive -> AnswErr(ERR_ILLEGAL_REQUEST)  
+Wenn SeNr == nextExpected:  
+rufe appWriteCallback(buf, len)  
+nextExpected++  
+Antw.: AnswOk, SeNo = nextExpected (kumulativ)  
+Wenn SeNr < nextExpected:  
+Duplikat -> Antw.: AnswOk, SeNo = nextExpected  
+Wenn SeNr > nextExpected:  
+Out-of-order -> Antw.: AnswWarn, ErrNo = ERR_WRONG_SEQ (Paket verworfen) 
+
+### ReqClose:
+Falls transferActive: appEndCallback() (Datei schließen), transferActive=0  
+Antw.: AnswOk, SeNo = nextExpected  
+
+### SEND_ANSWER
+Simuliere ACK-Verlust (lossAck): ggf. nicht senden  
+Sonst: sendAnswer(answPtr)  
+
+### CLOSE_HANDSHAKE
+Wenn ReqClose empfangen und AnswOk gesendet: beende Loop und exitServer()  
+
+## Wichtige Regeln:
+Empfänger puffert NICHT (keine Reassembly für OOO) — nur in-order akzeptieren.  
+Antworten sind kumulativ: SeNo = nächstes erwartetes Paket.  
+Bei Duplicate sendet Server das aktuelle kumulative ACK (nextExpected).  
+Loss-Simulationen mit lossReq / lossAck für Tests.  
