@@ -13,4 +13,7 @@ PlantUML (zum Erstellen von UML-Diagramme)
 Erklärung zu Go-Back-N von GitHub  
 https://github.com/yh742/go-back-n  
 
+Weg-Zeit-Diagramme  
+kn-pr.tkn.tu-berlin.de/script/html/BlockC/index.php?id=2  
+
 tipp: für zeilenumbrüche zweimal space nach jeder zeile
