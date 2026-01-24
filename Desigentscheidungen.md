@@ -15,7 +15,6 @@
 - Sendefenster: [base, base+window_size-1]
 - Pro Intervall max. 1 neues Paket in Fenster
 - Bei ACK: Fenster vorwärts schieben
-- Bei Timeout: Alle Pakete im Fenster erneut senden
 
 - `-w 1`: Stop-and-Wait (einfach)
 - `-w 3`: Typisch balanciert
