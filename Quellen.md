@@ -10,4 +10,7 @@ https://de.wikipedia.org/wiki/Zustandsdiagramm_(UML)
 PlantUML (zum Erstellen von UML-Diagramme)  
  https://plantuml.com/plantuml  
 
+Erklärung zu Go-Back-N von GitHub  
+https://github.com/yh742/go-back-n  
+
 tipp: für zeilenumbrüche zweimal space nach jeder zeile
