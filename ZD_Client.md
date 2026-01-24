@@ -108,61 +108,61 @@ stateDiagram-v2
 ## Detaillierte textuelle Beschreibung — Client (Sender)
 
 ### Relevante Variablen
-    base: Anfang des Sendefensters (erste unbestätigte SeqNr)
-    next_seqnum: nächste SeqNr, die zur Einfügung in Sendepuffer vorgesehen ist (Zähler)
-    packet_count: Anzahl unbestätigter Pakete im Fenster
-    window_size: gewünschte Fenstergröße (1..10)
-    send_buffer[]: Ringpuffer mit gespeicherten Request-Paketen
-    packet_timer[]: Timer (in Intervallen) pro Pufferposition (Timeout = GBN_TIMEOUT_UNITS * GBN_TIMEOUT_INT_MS)
-    packet_sent[]: Flag, ob Pufferposition aktiv ist
-    current_packet_num: Sequenznummer, die gerade für neues app_unit verwendet wird
+base: Anfang des Sendefensters (erste unbestätigte SeqNr)
+next_seqnum: nächste SeqNr, die zur Einfügung in Sendepuffer vorgesehen ist (Zähler)
+packet_count: Anzahl unbestätigter Pakete im Fenster
+window_size: gewünschte Fenstergröße (1..10)
+send_buffer[]: Ringpuffer mit gespeicherten Request-Paketen
+packet_timer[]: Timer (in Intervallen) pro Pufferposition (Timeout = GBN_TIMEOUT_UNITS * GBN_TIMEOUT_INT_MS)
+packet_sent[]: Flag, ob Pufferposition aktiv ist
+current_packet_num: Sequenznummer, die gerade für neues app_unit verwendet wird
 
 ### Zustände & Aktionen  
 
 ### INIT  
-    Aktion: initClient() aufrufen, Socket non-blocking erzeugen  
-    Übergang bei arqSendHello -> HELLO_SENT  
+Aktion: initClient() aufrufen, Socket non-blocking erzeugen  
+Übergang bei arqSendHello -> HELLO_SENT  
 
 ### HELLO_SENT  
-    Aktion: sende HELLO-Paket, warte mit select() maximal GBN_TIMEOUT_UNITS*GBN_TIMEOUT_INT_MS  
-    bei AnswHello/AnswOk -> set connection_active = 1, base=0,next_seqnum=0 -> IDLE  
-    bei wiederholten Timeouts -> Fehler  
+Aktion: sende HELLO-Paket, warte mit select() maximal GBN_TIMEOUT_UNITS*GBN_TIMEOUT_INT_MS  
+bei AnswHello/AnswOk -> set connection_active = 1, base=0,next_seqnum=0 -> IDLE  
+bei wiederholten Timeouts -> Fehler  
 
 ### IDLE  
-    Aktion: Anwendung ruft arqSendData() mit einer Zeile  
-    Übergang zu ENQUEUE_SEND  
+Aktion: Anwendung ruft arqSendData() mit einer Zeile  
+Übergang zu ENQUEUE_SEND  
 
 ### ENQUEUE_SEND  
-    Aktion: falls packet_count < window_size, speichere Paket in send_buffer[idx = SeNr % B_SIZE], set packet_timer[idx]=GBN_TIMEOUT_UNITS, packet_sent[idx]=1, packet_count++, next_seqnum++.  
-    Andernfalls: WINDOW_FULL (warte auf ACKs)  
+Aktion: falls packet_count < window_size, speichere Paket in send_buffer[idx = SeNr % B_SIZE], set packet_timer[idx]=GBN_TIMEOUT_UNITS, packet_sent[idx]=1, packet_count++, next_seqnum++.  
+Andernfalls: WINDOW_FULL (warte auf ACKs)  
 
 ### SEND_ON_INTERVAL  
-    Aktion: einmal pro Intervall maximal ein Paket senden (neu oder bei Retransmit das erste im Fenster). Nach Senden: enter WAIT_INTERVAL  
+Aktion: einmal pro Intervall maximal ein Paket senden (neu oder bei Retransmit das erste im Fenster). Nach Senden: enter WAIT_INTERVAL  
 
 ### WAIT_INTERVAL (select für GBN_TIMEOUT_INT_MS)  
-    Wenn Antwort vor Ablauf eintrifft: PROCESS_ACK  
-    Wenn Timeout (kein ACK): INTERVAL_END -> decrement timers -> eventuell Retransmit  
+Wenn Antwort vor Ablauf eintrifft: PROCESS_ACK  
+Wenn Timeout (kein ACK): INTERVAL_END -> decrement timers -> eventuell Retransmit  
 
 ### PROCESS_ACK  
-    Prüfe ans->AnswType:  
-        AnswOk: ack_seq = SeNo  
-            Wenn ack_seq in [base, next_seqnum]: advance base to ack_seq, free packets (packet_sent[...] = 0), packet_count -= freed  
-            Wenn ack_seq > req.SeNr: bestätigen, return success to application  
-        AnswWarn/Err: Fehler/Abbruch  
-        AnsW außerhalb window: ignorieren  
-    Nach Verarbeitung warte bis Intervallende (falls ACK kam vor Intervallende) — d.h. Ruhe bis Intervallende und dann weiter  
+Prüfe ans->AnswType:  
+AnswOk: ack_seq = SeNo  
+Wenn ack_seq in [base, next_seqnum]: advance base to ack_seq, free packets (packet_sent[...] = 0), packet_count -= freed  
+Wenn ack_seq > req.SeNr: bestätigen, return success to application  
+AnswWarn/Err: Fehler/Abbruch  
+AnsW außerhalb window: ignorieren  
+Nach Verarbeitung warte bis Intervallende (falls ACK kam vor Intervallende) — d.h. Ruhe bis Intervallende und dann weiter  
 
 ### TIMEOUT / RETRANSMIT  
-    Wenn packet_timer[base] <= 0: retransmit_all(): set packet_timer[...] = GBN_TIMEOUT_UNITS, sende alle unbestätigten Pakete (go-back-n)  
+Wenn packet_timer[base] <= 0: retransmit_all(): set packet_timer[...] = GBN_TIMEOUT_UNITS, sende alle unbestätigten Pakete (go-back-n)  
 
 ### CLOSE_SENT  
-    Sende CLOSE, warte auf AnswOk; Retry mit select() bis max retries -> FINISHED oder ERROR  
+Sende CLOSE, warte auf AnswOk; Retry mit select() bis max retries -> FINISHED oder ERROR  
 
 ### Wichtige Regeln (Mapping auf Verhalten/Aufgabe):  
-    Pro Intervall maximal 1 send operation (neu oder retransmit) — der select() mit GBN_TIMEOUT_INT_MS bildet das Intervall.  
-    Timer werden in Einheiten (Intervallen) dekrementiert.  
-    ACKs sind kumulativ: AnswOk.SeNo = nächstes erwartetes SeqNr; Client verschiebt base entsprechend.  
-    Ringpuffer: idx = SeNr % GBN_BUFFER_SIZE  
-    Bei Timeout des ersten Pakets: Retransmit aller unbestätigten Pakete (Go-Back-N).  
+Pro Intervall maximal 1 send operation (neu oder retransmit) — der select() mit GBN_TIMEOUT_INT_MS bildet das Intervall.  
+Timer werden in Einheiten (Intervallen) dekrementiert.  
+ACKs sind kumulativ: AnswOk.SeNo = nächstes erwartetes SeqNr; Client verschiebt base entsprechend.  
+Ringpuffer: idx = SeNr % GBN_BUFFER_SIZE  
+Bei Timeout des ersten Pakets: Retransmit aller unbestätigten Pakete (Go-Back-N).  
 
 
