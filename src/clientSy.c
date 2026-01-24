@@ -85,7 +85,7 @@ void initClient(char *name, const char *port)
             continue;   // Nächste Adresse versuchen
         }
         
-        // WICHTIG: Socket auf NON-BLOCKING setzen
+        // KRITISCH: Socket auf NON-BLOCKING setzen
         // Damit blockiert recvfrom() nicht und wir können select() verwenden
         fcntl(sockfd, F_SETFL, O_NONBLOCK);
 
@@ -240,7 +240,7 @@ static int has_timeout(void)
 /**
  * retransmit_all() - Sendet alle Pakete im Fenster erneut (Go-Back-N)
  * 
- * Hier ist Go-Back-N:
+ * Das ist die "Go-Back-N" Strategie:
  * - Bei Timeout des ersten Pakets (base)
  * - Sende ALLE unbestätigten Pakete erneut
  * - Timer werden zurückgesetzt
@@ -342,23 +342,23 @@ int arqSendHello(int winSize)
 }
 
 /**
- * arqSendData() - Sendet ein Datenpaket (zuverlässig)
+ * arqSendData() - Sendet ein Datenpaket zuverlässig
  * 
  * Implementiert den Go-Back-N Algorithmus mit Intervallen (100ms)
  * 
- * Pro Intervall in Reihenfolge:
- * Prüfe ob Timeout vorliegt -> Retransmit
- * Füge neues Paket ins Fenster ein (falls Platz)
- * Sende 1 Paket
- * Warte auf ACK oder Timeout
- * Dekrement Timer
+ * Pro Intervall:
+ * 1. Prüfe ob Timeout vorliegt -> Retransmit
+ * 2. Füge neues Paket ins Fenster ein (falls Platz)
+ * 3. Sende 1 Paket
+ * 4. Warte auf ACK oder Timeout
+ * 5. Dekrement Timer
  */
 int arqSendData(const struct app_unit *app, int winSize)
 {
     struct request req;
     struct answer *ans;
     int interval_count = 0;
-    const int max_intervals = 50;   // Max 50 Intervalle pro Paket (5 Sekunden)
+    const int max_intervals = 50;   // Max 50 Intervalle = 5 Sekunden Geduld
     struct timeval tv;              // Für select()
     fd_set readfds;                 // Für select()
     
@@ -377,6 +377,7 @@ int arqSendData(const struct app_unit *app, int winSize)
     req.ReqType = ReqData;
     req.SeNr = current_packet_num;  // Sequenznummer für dieses Paket
     
+    // Daten kopieren
     size_t copy_len = app->len;
     if (copy_len >= BufferSize) {
         copy_len = BufferSize - 1;
@@ -390,10 +391,10 @@ int arqSendData(const struct app_unit *app, int winSize)
            current_packet_num, req.FlNr);
     
     /* ============================================================ */
-    /* Go-Back-N: Fenster kann mehrere Pakete halten                */
+    /* HAUPTSCHLEIFE: Pro Intervall max 1 Paket senden              */
     /* ============================================================ */
     
-    int packet_in_buffer = 0;   // Flag: Paket wurde bereits ins Fenster eingefügt
+    int packet_in_buffer = 0;  // Flag: Paket wurde bereits eingefügt
     
     while (interval_count < max_intervals) {
         printf("[CLIENT] --- INTERVAL %d START (window=%d/%d, base=%lu, next=%lu) ---\n",
@@ -407,31 +408,41 @@ int arqSendData(const struct app_unit *app, int winSize)
             }
         }
         
-        // 2. Neues Paket ins Fenster (falls Platz und noch nicht drin)
+        // 2. Neues Paket ins Fenster einfügen (falls Platz und noch nicht drin)
         if (!packet_in_buffer && packet_count < winSize) {
-            int idx = req.SeNr % GBN_BUFFER_SIZE;
+            int idx = req.SeNr % GBN_BUFFER_SIZE; // Ringpuffer-Index
+
+            // Paket in Buffer speichern
             memcpy(&send_buffer[idx], &req, sizeof(struct request));
             packet_sent[idx] = 1;
             packet_timer[idx] = GBN_TIMEOUT_UNITS;  // Timer = 3 Intervalle = 300ms
             packet_count++;
             next_seqnum++;
-            packet_in_buffer = 1;   // Nur einmal einfügen
+            packet_in_buffer = 1;   // <- Nur einmal einfügen
             
             printf("[CLIENT] ENQUEUE: packet seq=%lu into buffer[%d], window now %d/%d\n",
                    req.SeNr, idx, packet_count, winSize);
         }
         
-        // 3. Sende alle Pakete im Fenster (Go-Back-N)
-        for (int i = 0; i < packet_count; i++) {
-            int send_idx = (base + i) % GBN_BUFFER_SIZE;
-            if (packet_sent[send_idx]) {
-                if (send_packet(&send_buffer[send_idx]) < 0) {
-                    return -1;
-                }
+        // 3. Sende 1 Paket
+        if (packet_in_buffer && packet_count > 0) {
+            int idx;
+
+            // Welches Paket senden?
+            if (packet_in_buffer && send_buffer[req.SeNr % GBN_BUFFER_SIZE].SeNr == req.SeNr) {
+                // Sende das gerade eingefügte Paket (Neu)
+                idx = req.SeNr % GBN_BUFFER_SIZE;
+            } else {
+                // Sende erstes Paket (Retransmit)
+                idx = base % GBN_BUFFER_SIZE;
+            }
+            
+            if (send_packet(&send_buffer[idx]) < 0) {
+                return -1;
             }
         }
         
-        // 4. Warte auf ACK (100ms)
+        // 4. Genau 1 Intervall (100ms) auf ACK warten 
         tv.tv_sec = GBN_TIMEOUT_INT_MS / 1000;              // 0 Sekunden
         tv.tv_usec = (GBN_TIMEOUT_INT_MS % 1000) * 1000;    // 100000 Mikrosekunden = 100ms
         
@@ -441,53 +452,63 @@ int arqSendData(const struct app_unit *app, int winSize)
         int ret = select(sockfd + 1, &readfds, NULL, NULL, &tv);
         
         if (ret > 0) {
-            // Socket ist lesbar -> ACK verfügbar
+            // Socken ist lesbar = ACK empfangen
             ans = receive_answer();
             if (ans != NULL && ans->AnswType == AnswOk) {
                 unsigned long ack_seq = ans->SeNo;
                 
                 printf("[CLIENT] ACK RECEIVED: ack_seq=%lu\n", ack_seq);
                 
-                // Fenster verschieben (kumulativ)
-                if (ack_seq > base && ack_seq <= next_seqnum) {
-                    int packets_to_free = ack_seq - base;
-                    printf("[CLIENT] WINDOW ADVANCE: base %lu -> %lu (free %d packets)\n",
-                           base, ack_seq, packets_to_free);
-                    
-                    // Pakete aus dem Puffer entfernen
-                    for (int i = 0; i < packets_to_free && i < packet_count; i++) {
-                        int free_idx = (base + i) % GBN_BUFFER_SIZE;
-                        packet_sent[free_idx] = 0;
-                        packet_timer[free_idx] = 0;
+                // Prüfe ob ACK im Fenster liegt
+                if (ack_seq >= base && ack_seq <= next_seqnum) {
+
+                    // Fenster verschieben (kumulative ACK)
+                    if (ack_seq > base) {
+                        int packets_to_free = ack_seq - base;
+                        printf("[CLIENT] WINDOW ADVANCE: base %lu -> %lu (free %d packets)\n",
+                               base, ack_seq, packets_to_free);
+                        
+                        // Alte Pakete aus dem Puffer entfernen
+                        for (int i = 0; i < packets_to_free && i < packet_count; i++) {
+                            int free_idx = (base + i) % GBN_BUFFER_SIZE;
+                            packet_sent[free_idx] = 0;
+                            packet_timer[free_idx] = 0;
+                        }
+                        
+                        packet_count -= packets_to_free;
+                        if (packet_count < 0) packet_count = 0;
+                        base = ack_seq;
                     }
-                    
-                    packet_count -= packets_to_free;
-                    if (packet_count < 0) packet_count = 0;
-                    base = ack_seq;
-                }
-                
-                // Ist das aktuelle Paket bestätigt?
-                if (ack_seq > req.SeNr) {
-                    printf("[CLIENT] CONFIRMED: packet seq=%lu confirmed\n", req.SeNr);
-                    current_packet_num++;
-                    return 0;
+
+                    // Wurde unser Paket bestätigt?
+                    if (ack_seq > req.SeNr) {
+                        printf("[CLIENT] CONFIRMED: packet seq=%lu confirmed\n", req.SeNr);
+                        current_packet_num++;
+                        return 0;  // Erfolg
+                    }
+                } else {
+                    // ACK außerhalb des Fensters -> ignorieren
+                    printf("[CLIENT] ACK OUT OF WINDOW: %lu not in [%lu, %lu) - ignored\n",
+                           ack_seq, base, next_seqnum);
                 }
             }
         } else if (ret < 0) {
             perror("select");
             return -1;
         }
+        // ret == 0: select timeout - Intervall vorbei
         
-        // 5. Timer dekrementieren
+        // 5. Dekrementiere alle Timer für nächstes Intervall
         decrement_all_timers();
         
         printf("[CLIENT] --- INTERVAL %d END ---\n\n", interval_count);
+        
         interval_count++;
     }
     
     fprintf(stderr, "[CLIENT] ERROR: Max intervals exceeded for packet %lu\n", 
             current_packet_num);
-    return -3;  // Fehler: Max Intervals überschritten
+    return -3;  // Fehler: Zu lange gewartet
 }
 
 /**
