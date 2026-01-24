@@ -4,7 +4,7 @@
 
 ### 1.1 Drei-Schichten-Modell
 - **Anwendungsschicht**: client.c und server.c
-  - Datei I/O und User-Interface
+  - File Input/Output und User-Interface
   - Callbacks für ARQ-Schicht (appStartFn, appWriteFn, appEndFn)
 
 - **ARQ-Schicht**: clientSy.c und serverSy.c
@@ -93,7 +93,7 @@ Parameter `-r` und `-a` simulieren Fehlerquoten:
 ### 5.3 Protokoll-Fehler
 - DATA ohne aktiven Transfer wird abgelehnt
 - Falsche Sequenznummern werden erkannt
-- Datei I/O Fehler werden gemeldet
+- File Input/Output Fehler werden gemeldet
 - Unbekannte Request-Typen werden ignoriert
 
 ## 6. Performance-Aspekte
